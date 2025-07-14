@@ -1,0 +1,301 @@
+-- Reverse Tower Defense Core System
+-- Place this in ServerScriptService
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+-- Game Configuration
+local CONFIG = {
+	SPAWN_POINTS_MAX = 100,
+	SPAWN_POINTS_REGEN = 2, -- per second
+	CREATURE_SPEED = 16,
+	WAYPOINT_REACH_DISTANCE = 5
+}
+
+-- Create RemoteEvents for client-server communication
+local remoteEvents = Instance.new("Folder")
+remoteEvents.Name = "RemoteEvents"
+remoteEvents.Parent = ReplicatedStorage
+
+local spawnCreatureEvent = Instance.new("RemoteEvent")
+spawnCreatureEvent.Name = "SpawnCreature"
+spawnCreatureEvent.Parent = remoteEvents
+
+local updateUIEvent = Instance.new("RemoteEvent")
+updateUIEvent.Name = "UpdateUI"
+updateUIEvent.Parent = remoteEvents
+
+-- Creature Templates
+local CREATURES = {
+	Scout = {
+		name = "Scout",
+		health = 50,
+		speed = 24,
+		cost = 10,
+		color = Color3.fromRGB(100, 255, 100),
+		size = Vector3.new(2, 2, 2)
+	},
+	Tank = {
+		name = "Tank",
+		health = 200,
+		speed = 8,
+		cost = 25,
+		color = Color3.fromRGB(255, 100, 100),
+		size = Vector3.new(4, 4, 4)
+	},
+	Swarm = {
+		name = "Swarm",
+		health = 20,
+		speed = 18,
+		cost = 5,
+		color = Color3.fromRGB(255, 255, 100),
+		size = Vector3.new(1, 1, 1)
+	}
+}
+
+-- Player data storage
+local playerData = {}
+
+-- Waypoint system (you'll need to place these in your map)
+local waypoints = {}
+
+-- Initialize waypoints (replace with actual waypoint positions in your map)
+local function initializeWaypoints()
+	local waypointFolder = workspace:FindFirstChild("Waypoints")
+	if waypointFolder then
+		for i = 1, #waypointFolder:GetChildren() do
+			local waypoint = waypointFolder:FindFirstChild("Waypoint" .. i)
+			if waypoint then
+				table.insert(waypoints, waypoint.Position)
+			end
+		end
+	else
+		-- Default waypoints if none exist
+		waypoints = {
+			Vector3.new(0, 5, 0),
+			Vector3.new(50, 5, 0),
+			Vector3.new(100, 5, 0),
+			Vector3.new(150, 5, 0)
+		}
+	end
+end
+
+-- Initialize player data
+local function initializePlayer(player)
+	print("DEBUG: Initializing player", player.Name)
+	playerData[player.UserId] = {
+		spawnPoints = CONFIG.SPAWN_POINTS_MAX,
+		score = 0,
+		creatures = {}
+	}
+
+	print("DEBUG: Player data created:", playerData[player.UserId])
+
+	-- Update client UI
+	updateUIEvent:FireClient(player, playerData[player.UserId])
+	print("DEBUG: UI update sent to", player.Name)
+end
+
+-- Create creature model
+local function createCreature(creatureType, position)
+	local template = CREATURES[creatureType]
+	if not template then return nil end
+
+	local creature = Instance.new("Part")
+	creature.Name = template.name
+	creature.Size = template.size
+	creature.Color = template.color
+	creature.Material = Enum.Material.Neon
+	creature.Shape = Enum.PartType.Block
+	creature.TopSurface = Enum.SurfaceType.Smooth
+	creature.BottomSurface = Enum.SurfaceType.Smooth
+	creature.Position = position
+	creature.CanCollide = true -- Enable collision
+
+	-- Add health attribute
+	creature:SetAttribute("Health", template.health)
+	creature:SetAttribute("MaxHealth", template.health)
+	creature:SetAttribute("Speed", template.speed)
+	creature:SetAttribute("CreatureType", creatureType)
+
+	-- Add BodyPosition for better ground following
+	local bodyPosition = Instance.new("BodyPosition")
+	bodyPosition.MaxForce = Vector3.new(4000, 4000, 4000)
+	bodyPosition.Position = position
+	bodyPosition.P = 3000
+	bodyPosition.D = 500
+	bodyPosition.Parent = creature
+
+	-- Add BodyVelocity for horizontal movement
+	local bodyVelocity = Instance.new("BodyVelocity")
+	bodyVelocity.MaxForce = Vector3.new(4000, 0, 4000) -- No Y force
+	bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+	bodyVelocity.Parent = creature
+
+	-- Add health bar
+	local billboard = Instance.new("BillboardGui")
+	billboard.Size = UDim2.new(2, 0, 0.5, 0)
+	billboard.StudsOffset = Vector3.new(0, 3, 0)
+	billboard.Parent = creature
+
+	local healthBar = Instance.new("Frame")
+	healthBar.Size = UDim2.new(1, 0, 1, 0)
+	healthBar.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+	healthBar.BorderSizePixel = 0
+	healthBar.Parent = billboard
+
+	local healthBg = Instance.new("Frame")
+	healthBg.Size = UDim2.new(1, 0, 1, 0)
+	healthBg.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+	healthBg.BorderSizePixel = 0
+	healthBg.ZIndex = healthBar.ZIndex - 1
+	healthBg.Parent = billboard
+
+	creature.Parent = workspace
+	return creature
+end
+
+-- Move creature along waypoints
+local function moveCreature(creature)
+	local currentWaypoint = 1
+	local speed = creature:GetAttribute("Speed")
+
+	local function moveToNext()
+		if currentWaypoint > #waypoints then
+			-- Creature reached the end!
+			local playerId = creature:GetAttribute("OwnerId")
+			if playerId and playerData[playerId] then
+				playerData[playerId].score = playerData[playerId].score + 10
+				local player = Players:GetPlayerByUserId(playerId)
+				if player then
+					updateUIEvent:FireClient(player, playerData[playerId])
+				end
+			end
+			creature:Destroy()
+			return
+		end
+
+		local targetPos = waypoints[currentWaypoint]
+		-- Keep creature at ground level (adjust Y to be above ground)
+		local groundLevel = targetPos.Y + (creature.Size.Y / 2)
+		targetPos = Vector3.new(targetPos.X, groundLevel, targetPos.Z)
+
+		local direction = (targetPos - creature.Position).Unit
+		local bodyVelocity = creature:FindFirstChild("BodyVelocity")
+		local bodyPosition = creature:FindFirstChild("BodyPosition")
+
+		if bodyVelocity and bodyPosition then
+			-- Move horizontally with BodyVelocity
+			bodyVelocity.Velocity = Vector3.new(direction.X * speed, 0, direction.Z * speed)
+			-- Keep at ground level with BodyPosition
+			bodyPosition.Position = Vector3.new(targetPos.X, groundLevel, targetPos.Z)
+		end
+
+		-- Check if reached waypoint
+		local connection
+		connection = RunService.Heartbeat:Connect(function()
+			if not creature.Parent then
+				connection:Disconnect()
+				return
+			end
+
+			local distance = (Vector3.new(creature.Position.X, 0, creature.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
+			if distance < CONFIG.WAYPOINT_REACH_DISTANCE then
+				connection:Disconnect()
+				currentWaypoint = currentWaypoint + 1
+				moveToNext()
+			end
+		end)
+	end
+
+	moveToNext()
+end
+
+-- Handle creature spawning
+spawnCreatureEvent.OnServerEvent:Connect(function(player, creatureType)
+	print("DEBUG: Spawn request from", player.Name, "for", creatureType)
+
+	local data = playerData[player.UserId]
+	if not data then 
+		print("DEBUG: No player data found!")
+		return 
+	end
+
+	local template = CREATURES[creatureType]
+	if not template then 
+		print("DEBUG: Invalid creature type:", creatureType)
+		return 
+	end
+
+	-- Check if player has enough spawn points
+	if data.spawnPoints < template.cost then
+		print("DEBUG: Not enough spawn points. Has:", data.spawnPoints, "Needs:", template.cost)
+		return
+	end
+
+	print("DEBUG: Creating creature at spawn point...")
+
+	-- Deduct spawn points
+	data.spawnPoints = data.spawnPoints - template.cost
+
+	-- Create creature at spawn point
+	local spawnPoint = Vector3.new(0, 10, 0) -- Changed to center of map for testing
+	local creature = createCreature(creatureType, spawnPoint)
+
+	if creature then
+		print("DEBUG: Creature created successfully at", creature.Position)
+		creature:SetAttribute("OwnerId", player.UserId)
+		table.insert(data.creatures, creature)
+		moveCreature(creature)
+	else
+		print("DEBUG: Failed to create creature!")
+	end
+
+	-- Update client UI
+	updateUIEvent:FireClient(player, data)
+end)
+
+-- Spawn points regeneration
+spawn(function()
+	while true do
+		wait(1)
+		for userId, data in pairs(playerData) do
+			if data.spawnPoints < CONFIG.SPAWN_POINTS_MAX then
+				data.spawnPoints = math.min(data.spawnPoints + CONFIG.SPAWN_POINTS_REGEN, CONFIG.SPAWN_POINTS_MAX)
+				local player = Players:GetPlayerByUserId(userId)
+				if player then
+					updateUIEvent:FireClient(player, data)
+				end
+			end
+		end
+	end
+end)
+
+-- Player events
+Players.PlayerAdded:Connect(function(player)
+	print("DEBUG: Player", player.Name, "joined")
+	player.CharacterAdded:Connect(function()
+		print("DEBUG: Character added for", player.Name)
+		initializePlayer(player)
+	end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	local data = playerData[player.UserId]
+	if data then
+		-- Clean up creatures
+		for _, creature in pairs(data.creatures) do
+			if creature.Parent then
+				creature:Destroy()
+			end
+		end
+		playerData[player.UserId] = nil
+	end
+end)
+
+-- Initialize waypoints
+initializeWaypoints()
+
+print("Reverse Tower Defense Server initialized!")
