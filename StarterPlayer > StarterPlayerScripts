@@ -1,0 +1,256 @@
+-- Reverse Tower Defense Client UI
+-- Place this in StarterPlayer > StarterPlayerScripts
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- Wait for remote events
+local remoteEvents = ReplicatedStorage:WaitForChild("RemoteEvents")
+local spawnCreatureEvent = remoteEvents:WaitForChild("SpawnCreature")
+local updateUIEvent = remoteEvents:WaitForChild("UpdateUI")
+
+-- Creature info for UI
+local CREATURES = {
+	Scout = {
+		name = "Scout",
+		health = 50,
+		speed = 24,
+		cost = 10,
+		color = Color3.fromRGB(100, 255, 100),
+		description = "Fast but fragile"
+	},
+	Tank = {
+		name = "Tank",
+		health = 200,
+		speed = 8,
+		cost = 25,
+		color = Color3.fromRGB(255, 100, 100),
+		description = "Slow but tough"
+	},
+	Swarm = {
+		name = "Swarm",
+		health = 20,
+		speed = 18,
+		cost = 5,
+		color = Color3.fromRGB(255, 255, 100),
+		description = "Weak but cheap"
+	}
+}
+
+-- UI Elements
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "TowerDefenseUI"
+screenGui.Parent = playerGui
+
+-- Main frame
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 300, 0, 400)
+mainFrame.Position = UDim2.new(0, 10, 0, 10)
+mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+mainFrame.BorderSizePixel = 0
+mainFrame.Parent = screenGui
+
+-- Add corner rounding
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 10)
+corner.Parent = mainFrame
+
+-- Title
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 40)
+title.BackgroundTransparency = 1
+title.Text = "MONSTER COMMANDER"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextScaled = true
+title.Font = Enum.Font.GothamBold
+title.Parent = mainFrame
+
+-- Stats frame
+local statsFrame = Instance.new("Frame")
+statsFrame.Size = UDim2.new(1, -20, 0, 60)
+statsFrame.Position = UDim2.new(0, 10, 0, 50)
+statsFrame.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+statsFrame.BorderSizePixel = 0
+statsFrame.Parent = mainFrame
+
+local statsCorner = Instance.new("UICorner")
+statsCorner.CornerRadius = UDim.new(0, 5)
+statsCorner.Parent = statsFrame
+
+-- Spawn points display
+local spawnPointsLabel = Instance.new("TextLabel")
+spawnPointsLabel.Size = UDim2.new(0.5, 0, 0.5, 0)
+spawnPointsLabel.BackgroundTransparency = 1
+spawnPointsLabel.Text = "Spawn Points: 100"
+spawnPointsLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+spawnPointsLabel.TextScaled = true
+spawnPointsLabel.Font = Enum.Font.Gotham
+spawnPointsLabel.Parent = statsFrame
+
+-- Score display
+local scoreLabel = Instance.new("TextLabel")
+scoreLabel.Size = UDim2.new(0.5, 0, 0.5, 0)
+scoreLabel.Position = UDim2.new(0.5, 0, 0, 0)
+scoreLabel.BackgroundTransparency = 1
+scoreLabel.Text = "Score: 0"
+scoreLabel.TextColor3 = Color3.fromRGB(255, 255, 100)
+scoreLabel.TextScaled = true
+scoreLabel.Font = Enum.Font.Gotham
+scoreLabel.Parent = statsFrame
+
+-- Spawn points bar
+local spawnBar = Instance.new("Frame")
+spawnBar.Size = UDim2.new(1, -20, 0, 8)
+spawnBar.Position = UDim2.new(0, 10, 0.5, 0)
+spawnBar.BackgroundColor3 = Color3.fromRGB(100, 255, 100)
+spawnBar.BorderSizePixel = 0
+spawnBar.Parent = statsFrame
+
+local spawnBarBg = Instance.new("Frame")
+spawnBarBg.Size = UDim2.new(1, 0, 1, 0)
+spawnBarBg.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+spawnBarBg.BorderSizePixel = 0
+spawnBarBg.ZIndex = spawnBar.ZIndex - 1
+spawnBarBg.Parent = statsFrame
+
+-- Creature selection frame
+local creatureFrame = Instance.new("Frame")
+creatureFrame.Size = UDim2.new(1, -20, 0, 280)
+creatureFrame.Position = UDim2.new(0, 10, 0, 120)
+creatureFrame.BackgroundTransparency = 1
+creatureFrame.Parent = mainFrame
+
+-- Create creature buttons
+local function createCreatureButton(creatureType, position)
+	local template = CREATURES[creatureType]
+
+	local button = Instance.new("TextButton")
+	button.Size = UDim2.new(1, 0, 0, 80)
+	button.Position = position
+	button.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+	button.BorderSizePixel = 0
+	button.Text = ""
+	button.Parent = creatureFrame
+
+	local buttonCorner = Instance.new("UICorner")
+	buttonCorner.CornerRadius = UDim.new(0, 8)
+	buttonCorner.Parent = button
+
+	-- Creature preview
+	local preview = Instance.new("Frame")
+	preview.Size = UDim2.new(0, 60, 0, 60)
+	preview.Position = UDim2.new(0, 10, 0, 10)
+	preview.BackgroundColor3 = template.color
+	preview.BorderSizePixel = 0
+	preview.Parent = button
+
+	local previewCorner = Instance.new("UICorner")
+	previewCorner.CornerRadius = UDim.new(0, 5)
+	previewCorner.Parent = preview
+
+	-- Creature info
+	local nameLabel = Instance.new("TextLabel")
+	nameLabel.Size = UDim2.new(0, 150, 0, 20)
+	nameLabel.Position = UDim2.new(0, 80, 0, 5)
+	nameLabel.BackgroundTransparency = 1
+	nameLabel.Text = template.name
+	nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	nameLabel.TextScaled = true
+	nameLabel.Font = Enum.Font.GothamBold
+	nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+	nameLabel.Parent = button
+
+	local costLabel = Instance.new("TextLabel")
+	costLabel.Size = UDim2.new(0, 150, 0, 15)
+	costLabel.Position = UDim2.new(0, 80, 0, 25)
+	costLabel.BackgroundTransparency = 1
+	costLabel.Text = "Cost: " .. template.cost
+	costLabel.TextColor3 = Color3.fromRGB(255, 255, 100)
+	costLabel.TextScaled = true
+	costLabel.Font = Enum.Font.Gotham
+	costLabel.TextXAlignment = Enum.TextXAlignment.Left
+	costLabel.Parent = button
+
+	local descLabel = Instance.new("TextLabel")
+	descLabel.Size = UDim2.new(0, 150, 0, 15)
+	descLabel.Position = UDim2.new(0, 80, 0, 45)
+	descLabel.BackgroundTransparency = 1
+	descLabel.Text = template.description
+	descLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+	descLabel.TextScaled = true
+	descLabel.Font = Enum.Font.Gotham
+	descLabel.TextXAlignment = Enum.TextXAlignment.Left
+	descLabel.Parent = button
+
+	local statsLabel = Instance.new("TextLabel")
+	statsLabel.Size = UDim2.new(0, 150, 0, 15)
+	statsLabel.Position = UDim2.new(0, 80, 0, 60)
+	statsLabel.BackgroundTransparency = 1
+	statsLabel.Text = "HP: " .. template.health .. " | Speed: " .. template.speed
+	statsLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+	statsLabel.TextScaled = true
+	statsLabel.Font = Enum.Font.Gotham
+	statsLabel.TextXAlignment = Enum.TextXAlignment.Left
+	statsLabel.Parent = button
+
+	-- Button functionality
+	button.MouseButton1Click:Connect(function()
+		spawnCreatureEvent:FireServer(creatureType)
+
+		-- Button feedback
+		local originalColor = button.BackgroundColor3
+		button.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+		wait(0.1)
+		button.BackgroundColor3 = originalColor
+	end)
+
+	return button
+end
+
+-- Create creature buttons
+local scoutButton = createCreatureButton("Scout", UDim2.new(0, 0, 0, 0))
+local tankButton = createCreatureButton("Tank", UDim2.new(0, 0, 0, 90))
+local swarmButton = createCreatureButton("Swarm", UDim2.new(0, 0, 0, 180))
+
+-- Update UI function
+local function updateUI(data)
+	spawnPointsLabel.Text = "Spawn Points: " .. data.spawnPoints
+	scoreLabel.Text = "Score: " .. data.score
+
+	-- Update spawn points bar
+	local percentage = data.spawnPoints / 100
+	spawnBar.Size = UDim2.new(percentage, -20, 0, 8)
+
+	-- Update button availability
+	for creatureType, button in pairs({Scout = scoutButton, Tank = tankButton, Swarm = swarmButton}) do
+		local cost = CREATURES[creatureType].cost
+		if data.spawnPoints >= cost then
+			button.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+		else
+			button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+		end
+	end
+end
+
+-- Handle UI updates from server
+updateUIEvent.OnClientEvent:Connect(updateUI)
+
+-- Hotkeys
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+
+	if input.KeyCode == Enum.KeyCode.One then
+		spawnCreatureEvent:FireServer("Scout")
+	elseif input.KeyCode == Enum.KeyCode.Two then
+		spawnCreatureEvent:FireServer("Tank")
+	elseif input.KeyCode == Enum.KeyCode.Three then
+		spawnCreatureEvent:FireServer("Swarm")
+	end
+end)
+
+print("Reverse Tower Defense Client UI loaded!")
